@@ -1,1 +1,5 @@
 repositories:
+  lidar_cluster_ros2:
+    type: zip
+    url: https://github.com/cougars-auv/lidar_cluster_ros2/archive/refs/heads/ros2.zip
+    version: lidar_cluster_ros2-ros2
