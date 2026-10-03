@@ -97,6 +97,7 @@ def launch_setup(context: LaunchContext, *args: Any, **kwargs: Any) -> list[Acti
                     "use_sim_time": use_sim_time,
                     "labels_file": labels_file,
                     "sizes_file": sizes_file,
+                    "map_frame": "map",
                 },
             ],
         ),
@@ -108,7 +109,10 @@ def launch_setup(context: LaunchContext, *args: Any, **kwargs: Any) -> list[Acti
                 fleet_param_file,
                 agent_param_file,
                 scenario_param_file,
-                {"use_sim_time": use_sim_time},
+                {
+                    "use_sim_time": use_sim_time,
+                    "map_frame": "map",
+                },
             ],
         ),
         Node(
