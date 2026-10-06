@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, TransformStamped
 from image_geometry import PinholeCameraModel
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
@@ -131,6 +131,18 @@ class LandmarkTrackerNode(Node):
             )
             return
 
+        detections, heading_known = self._convert_to_landmarks(msg, map_T_sensor_tf)
+        in_view = self._resolve_in_view(stamp, timeout)
+        self._update_landmarks(detections, heading_known, in_view)
+
+        landmarks_msg, markers_msg, labels_msg = self._convert_to_landmark_msgs(msg)
+        self._output_pub.publish(landmarks_msg)
+        self._marker_pub.publish(markers_msg)
+        self._label_pub.publish(labels_msg)
+
+    def _convert_to_landmarks(
+        self, msg: Detection3DArray, map_T_sensor_tf: TransformStamped
+    ) -> tuple[list[Landmark], list[bool]]:
         # Transform detections into the map frame
         detections, heading_known = [], []
         for detection in msg.detections:
@@ -139,7 +151,49 @@ class LandmarkTrackerNode(Node):
             result = detection.results[0]
             detections.append(Landmark(0, result.hypothesis.class_id, bbox))
             heading_known.append(not math.isinf(result.pose.covariance[35]))
+        return detections, heading_known
 
+    def _resolve_in_view(
+        self, stamp: rclpy.time.Time, timeout: rclpy.duration.Duration
+    ) -> set[int]:
+        # Find the landmarks in the camera's view and range
+        in_view: set[int] = set()
+        if self._camera_model is None:
+            return in_view
+
+        camera_frame = self._camera_model.get_tf_frame()
+        try:
+            camera_T_map_tf = self._tf_buffer.lookup_transform(
+                camera_frame, self._map_frame, stamp, timeout=timeout
+            )
+        except TransformException as e:
+            self.get_logger().warning(
+                f"Failed to look up transform from '{self._map_frame}' to '{camera_frame}': {e}",
+                throttle_duration_sec=1.0,
+            )
+            return in_view
+
+        q = camera_T_map_tf.transform.rotation
+        camera_R_map = Rotation.from_quat([q.x, q.y, q.z, q.w])
+        camera_p_map = [
+            camera_T_map_tf.transform.translation.x,
+            camera_T_map_tf.transform.translation.y,
+            camera_T_map_tf.transform.translation.z,
+        ]
+        width, height = self._camera_model.full_resolution()
+        for landmark in self._landmarks:
+            p = landmark.bbox.center.position
+            camera_p_landmark = camera_R_map.apply([p.x, p.y, p.z]) + camera_p_map
+            if not 0.0 < camera_p_landmark[2] <= self._max_range:
+                continue
+            u, v = self._camera_model.project_3d_to_pixel(camera_p_landmark)
+            if 0.0 <= u < width and 0.0 <= v < height:
+                in_view.add(landmark.id)
+        return in_view
+
+    def _update_landmarks(
+        self, detections: list[Landmark], heading_known: list[bool], in_view: set[int]
+    ) -> None:
         # Match each detection to at most one existing landmark
         costs = np.array(
             [
@@ -151,37 +205,6 @@ class LandmarkTrackerNode(Node):
         matches = {
             r: c for r, c in zip(rows, cols, strict=True) if costs[r, c] <= self._distance_threshold
         }
-
-        # Find the landmarks in the camera's view and range
-        in_view: set[int] = set()
-        if self._camera_model is not None:
-            camera_frame = self._camera_model.get_tf_frame()
-            try:
-                camera_T_map_tf = self._tf_buffer.lookup_transform(
-                    camera_frame, self._map_frame, stamp, timeout=timeout
-                )
-            except TransformException as e:
-                self.get_logger().warning(
-                    f"Failed to look up transform from '{self._map_frame}' to '{camera_frame}': {e}",
-                    throttle_duration_sec=1.0,
-                )
-            else:
-                q = camera_T_map_tf.transform.rotation
-                camera_R_map = Rotation.from_quat([q.x, q.y, q.z, q.w])
-                camera_p_map = [
-                    camera_T_map_tf.transform.translation.x,
-                    camera_T_map_tf.transform.translation.y,
-                    camera_T_map_tf.transform.translation.z,
-                ]
-                width, height = self._camera_model.full_resolution()
-                for landmark in self._landmarks:
-                    p = landmark.bbox.center.position
-                    camera_p_landmark = camera_R_map.apply([p.x, p.y, p.z]) + camera_p_map
-                    if not 0.0 < camera_p_landmark[2] <= self._max_range:
-                        continue
-                    u, v = self._camera_model.project_3d_to_pixel(camera_p_landmark)
-                    if 0.0 <= u < width and 0.0 <= v < height:
-                        in_view.add(landmark.id)
 
         # Count misses for missing landmarks and update existing matched ones
         for landmark in self._landmarks:
@@ -229,6 +252,9 @@ class LandmarkTrackerNode(Node):
                     kept.append(landmark)
         self._landmarks = kept
 
+    def _convert_to_landmark_msgs(
+        self, msg: Detection3DArray
+    ) -> tuple[Detection3DArray, MarkerArray, MarkerArray]:
         landmarks_msg = Detection3DArray()
         landmarks_msg.header.stamp = msg.header.stamp
         landmarks_msg.header.frame_id = self._map_frame
@@ -298,9 +324,7 @@ class LandmarkTrackerNode(Node):
                 label_marker.text += f" missed {landmark.misses}"
             labels_msg.markers.append(label_marker)
 
-        self._output_pub.publish(landmarks_msg)
-        self._marker_pub.publish(markers_msg)
-        self._label_pub.publish(labels_msg)
+        return landmarks_msg, markers_msg, labels_msg
 
     def _smooth_pose(self, landmark: Landmark, bbox: BoundingBox3D) -> None:
         previous, current = landmark.bbox.center, bbox.center

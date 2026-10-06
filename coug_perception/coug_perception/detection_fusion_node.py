@@ -18,8 +18,10 @@ import math
 import cv2
 import message_filters
 import numpy as np
+import numpy.typing as npt
 import rclpy
 import yaml
+from geometry_msgs.msg import TransformStamped
 from image_geometry import PinholeCameraModel
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, qos_profile_system_default
@@ -110,19 +112,9 @@ class DetectionFusionNode(Node):
         if self._camera_model is None:
             return
 
-        names, rects = [], []
-        for box in boxes_msg.detections:
-            if box.results and box.results[0].hypothesis.class_id in self._labels:
-                names.append(self._labels[box.results[0].hypothesis.class_id])
-                center = box.bbox.center.position
-                half_x, half_y = box.bbox.size_x / 2.0, box.bbox.size_y / 2.0
-                rects.append(
-                    (center.x - half_x, center.y - half_y, center.x + half_x, center.y + half_y)
-                )
+        names, box_rects = self._resolve_boxes(boxes_msg)
         if not names:
             return
-        box_rects = np.array(rects)
-        box_areas = np.prod(box_rects[:, 2:] - box_rects[:, :2], axis=1)
 
         # Project the cluster points into the camera image
         camera_frame = self._camera_model.get_tf_frame()
@@ -142,6 +134,36 @@ class DetectionFusionNode(Node):
             )
             return
 
+        self._output_pub.publish(
+            self._convert_to_detections(
+                clusters_msg, names, box_rects, self._camera_model, camera_T_sensor_tf
+            )
+        )
+
+    def _resolve_boxes(
+        self, boxes_msg: Detection2DArray
+    ) -> tuple[list[str], npt.NDArray[np.float64]]:
+        names, rects = [], []
+        for box in boxes_msg.detections:
+            if box.results and box.results[0].hypothesis.class_id in self._labels:
+                names.append(self._labels[box.results[0].hypothesis.class_id])
+                center = box.bbox.center.position
+                half_x, half_y = box.bbox.size_x / 2.0, box.bbox.size_y / 2.0
+                rects.append(
+                    (center.x - half_x, center.y - half_y, center.x + half_x, center.y + half_y)
+                )
+        return names, np.array(rects)
+
+    def _convert_to_detections(
+        self,
+        clusters_msg: PointCloud2,
+        names: list[str],
+        box_rects: npt.NDArray[np.float64],
+        camera_model: PinholeCameraModel,
+        camera_T_sensor_tf: TransformStamped,
+    ) -> Detection3DArray:
+        box_areas = np.prod(box_rects[:, 2:] - box_rects[:, :2], axis=1)
+
         q = camera_T_sensor_tf.transform.rotation
         camera_R_sensor = Rotation.from_quat([q.x, q.y, q.z, q.w])
         camera_p_sensor = [
@@ -149,7 +171,7 @@ class DetectionFusionNode(Node):
             camera_T_sensor_tf.transform.translation.y,
             camera_T_sensor_tf.transform.translation.z,
         ]
-        projection = self._camera_model.projection_matrix()
+        projection = camera_model.projection_matrix()
 
         cloud = point_cloud2.read_points_numpy(
             clusters_msg, field_names=["x", "y", "z", "intensity"], skip_nans=True
@@ -224,7 +246,7 @@ class DetectionFusionNode(Node):
             detection.results = [hypothesis]
             labeled_msg.detections.append(detection)
 
-        self._output_pub.publish(labeled_msg)
+        return labeled_msg
 
 
 def main(args: list[str] | None = None) -> None:

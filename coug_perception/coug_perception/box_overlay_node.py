@@ -63,11 +63,16 @@ class BoxOverlayNode(Node):
         self.get_logger().info("Initialization complete.")
 
     def _sync_callback(self, image_msg: Image, boxes_msg: Detection2DArray, /) -> None:
+        overlay_msg = self._convert_to_overlay(image_msg, boxes_msg)
+        if overlay_msg is not None:
+            self._output_pub.publish(overlay_msg)
+
+    def _convert_to_overlay(self, image_msg: Image, boxes_msg: Detection2DArray) -> Image | None:
         try:
             cv_image = self._bridge.imgmsg_to_cv2(image_msg, "bgr8")
         except CvBridgeError as e:
             self.get_logger().error(f"Failed to convert camera image: {e}")
-            return
+            return None
 
         for detection in boxes_msg.detections:
             if not detection.results:
@@ -95,9 +100,9 @@ class BoxOverlayNode(Node):
                 cv2.LINE_AA,
             )
 
-        overlay_msg = self._bridge.cv2_to_imgmsg(cv_image, "bgr8")
+        overlay_msg: Image = self._bridge.cv2_to_imgmsg(cv_image, "bgr8")
         overlay_msg.header = image_msg.header
-        self._output_pub.publish(overlay_msg)
+        return overlay_msg
 
 
 def main(args: list[str] | None = None) -> None:
