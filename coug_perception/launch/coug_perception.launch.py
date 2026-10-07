@@ -118,7 +118,7 @@ def launch_setup(context: LaunchContext, *args: Any, **kwargs: Any) -> list[Acti
         Node(
             package="lidar_cluster",
             executable="euclidean_spatial",
-            name="euclidean_cluster_node",
+            name="euclidean_spatial",
             parameters=[
                 fleet_param_file,
                 agent_param_file,
