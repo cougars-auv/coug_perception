@@ -40,6 +40,9 @@ from vision_msgs.msg import (
     ObjectHypothesisWithPose,
 )
 
+_YAW_COVARIANCE_IDX = 35
+_UNKNOWN_HEADING_VARIANCE = math.inf
+
 
 class DetectionFusionNode(Node):
     def __init__(self) -> None:
@@ -243,7 +246,7 @@ class DetectionFusionNode(Node):
             hypothesis.hypothesis.score = float(iou)
             hypothesis.pose.pose = detection.bbox.center
             if not heading_known:
-                hypothesis.pose.covariance[35] = math.inf
+                hypothesis.pose.covariance[_YAW_COVARIANCE_IDX] = _UNKNOWN_HEADING_VARIANCE
             detection.results = [hypothesis]
             labeled_msg.detections.append(detection)
 

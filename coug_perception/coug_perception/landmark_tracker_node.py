@@ -41,6 +41,10 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from coug_perception.utils.class_colors import class_color
 
+_MAX_ASSIGNMENT_COST = 1e6
+_YAW_COVARIANCE_IDX = 35
+_UNKNOWN_HEADING_VARIANCE = math.inf
+
 
 @dataclass
 class Landmark:
@@ -151,7 +155,9 @@ class LandmarkTrackerNode(Node):
             bbox = BoundingBox3D(center=pose, size=detection.bbox.size)
             result = detection.results[0]
             detections.append(Landmark(0, result.hypothesis.class_id, bbox))
-            heading_known.append(not math.isinf(result.pose.covariance[35]))
+            heading_known.append(
+                result.pose.covariance[_YAW_COVARIANCE_IDX] != _UNKNOWN_HEADING_VARIANCE
+            )
         return detections, heading_known
 
     def _resolve_in_view(
@@ -202,7 +208,7 @@ class LandmarkTrackerNode(Node):
                 for detection in detections
             ]
         ).reshape(len(detections), len(self._landmarks))
-        rows, cols = linear_sum_assignment(np.minimum(costs, 1e6))
+        rows, cols = linear_sum_assignment(np.minimum(costs, _MAX_ASSIGNMENT_COST))
         matches = {
             r: c for r, c in zip(rows, cols, strict=True) if costs[r, c] <= self._distance_threshold
         }
