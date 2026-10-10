@@ -54,10 +54,10 @@ class DetectionFusionNode(Node):
         self.declare_parameter("min_iou", 0.1)
         self.declare_parameter("min_heading_ratio", 1.5)
         self.declare_parameter("transform_timeout_sec", 0.1)
-        self.declare_parameter("input_topic", "clusters/points")
-        self.declare_parameter("boxes_topic", "camera/boxes")
+        self.declare_parameter("points_topic", "clusters/points")
+        self.declare_parameter("detections_topic", "camera/detections")
         self.declare_parameter("camera_info_topic", "camera/rgb/camera_info")
-        self.declare_parameter("output_topic", "detections_3d_labeled")
+        self.declare_parameter("detections_3d_topic", "detections_3d")
         self.declare_parameter("map_frame", "map")
 
         with open(self.get_parameter("labels_file").value) as f:
@@ -71,34 +71,34 @@ class DetectionFusionNode(Node):
         self._min_iou = self.get_parameter("min_iou").value
         self._min_heading_ratio = self.get_parameter("min_heading_ratio").value
         self._transform_timeout_sec = self.get_parameter("transform_timeout_sec").value
-        input_topic = self.get_parameter("input_topic").value
-        boxes_topic = self.get_parameter("boxes_topic").value
+        points_topic = self.get_parameter("points_topic").value
+        detections_topic = self.get_parameter("detections_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
-        output_topic = self.get_parameter("output_topic").value
+        detections_3d_topic = self.get_parameter("detections_3d_topic").value
         self._map_frame = self.get_parameter("map_frame").value
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True)
 
-        self._input_sub = message_filters.Subscriber(
-            self, PointCloud2, input_topic, qos_profile=qos_profile_system_default
+        self._points_sub = message_filters.Subscriber(
+            self, PointCloud2, points_topic, qos_profile=qos_profile_system_default
         )
-        self._boxes_sub = message_filters.Subscriber(
-            self, Detection2DArray, boxes_topic, qos_profile=qos_profile_system_default
+        self._detections_sub = message_filters.Subscriber(
+            self, Detection2DArray, detections_topic, qos_profile=qos_profile_system_default
         )
         self._camera_info_sub = self.create_subscription(
             CameraInfo, camera_info_topic, self._camera_info_callback, qos_profile_sensor_data
         )
 
         self._time_sync = message_filters.ApproximateTimeSynchronizer(
-            [self._input_sub, self._boxes_sub],
+            [self._points_sub, self._detections_sub],
             queue_size=20,
             slop=sync_slop_sec,
         )
         self._time_sync.registerCallback(self._sync_callback)
 
-        self._output_pub = self.create_publisher(
-            Detection3DArray, output_topic, qos_profile_system_default
+        self._detections_3d_pub = self.create_publisher(
+            Detection3DArray, detections_3d_topic, qos_profile_system_default
         )
 
         self._camera_model: PinholeCameraModel | None = None
@@ -111,11 +111,13 @@ class DetectionFusionNode(Node):
             camera_model.from_camera_info(msg)
             self._camera_model = camera_model
 
-    def _sync_callback(self, clusters_msg: PointCloud2, boxes_msg: Detection2DArray, /) -> None:
+    def _sync_callback(
+        self, clusters_msg: PointCloud2, detections_msg: Detection2DArray, /
+    ) -> None:
         if self._camera_model is None:
             return
 
-        names, box_rects = self._resolve_boxes(boxes_msg)
+        names, box_rects = self._resolve_boxes(detections_msg)
         if not names:
             return
 
@@ -124,7 +126,7 @@ class DetectionFusionNode(Node):
         try:
             camera_T_sensor_tf = self._tf_buffer.lookup_transform_full(
                 camera_frame,
-                rclpy.time.Time.from_msg(boxes_msg.header.stamp),
+                rclpy.time.Time.from_msg(detections_msg.header.stamp),
                 clusters_msg.header.frame_id,
                 rclpy.time.Time.from_msg(clusters_msg.header.stamp),
                 self._map_frame,
@@ -138,17 +140,17 @@ class DetectionFusionNode(Node):
             )
             return
 
-        self._output_pub.publish(
+        self._detections_3d_pub.publish(
             self._convert_to_detections(
                 clusters_msg, names, box_rects, self._camera_model, camera_T_sensor_tf
             )
         )
 
     def _resolve_boxes(
-        self, boxes_msg: Detection2DArray
+        self, detections_msg: Detection2DArray
     ) -> tuple[list[str], npt.NDArray[np.float64]]:
         names, rects = [], []
-        for box in boxes_msg.detections:
+        for box in detections_msg.detections:
             if box.results and box.results[0].hypothesis.class_id in self._labels:
                 names.append(self._labels[box.results[0].hypothesis.class_id])
                 center = box.bbox.center.position

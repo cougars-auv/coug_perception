@@ -68,9 +68,9 @@ class LandmarkTrackerNode(Node):
         self.declare_parameter("max_unseen", 30)
         self.declare_parameter("max_range", 10.0)
         self.declare_parameter("transform_timeout_sec", 0.1)
-        self.declare_parameter("input_topic", "detections_3d_labeled")
+        self.declare_parameter("detections_3d_topic", "detections_3d")
         self.declare_parameter("camera_info_topic", "camera/rgb/camera_info")
-        self.declare_parameter("output_topic", "landmarks")
+        self.declare_parameter("landmarks_topic", "landmarks")
         self.declare_parameter("marker_topic", "landmarks/markers")
         self.declare_parameter("label_topic", "landmarks/labels")
         self.declare_parameter("map_frame", "map")
@@ -83,9 +83,9 @@ class LandmarkTrackerNode(Node):
         self._max_unseen = self.get_parameter("max_unseen").value
         self._max_range = self.get_parameter("max_range").value
         self._transform_timeout_sec = self.get_parameter("transform_timeout_sec").value
-        input_topic = self.get_parameter("input_topic").value
+        detections_3d_topic = self.get_parameter("detections_3d_topic").value
         camera_info_topic = self.get_parameter("camera_info_topic").value
-        output_topic = self.get_parameter("output_topic").value
+        landmarks_topic = self.get_parameter("landmarks_topic").value
         marker_topic = self.get_parameter("marker_topic").value
         label_topic = self.get_parameter("label_topic").value
         self._map_frame = self.get_parameter("map_frame").value
@@ -93,14 +93,17 @@ class LandmarkTrackerNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True)
 
-        self._input_sub = self.create_subscription(
-            Detection3DArray, input_topic, self._detections_callback, qos_profile_system_default
+        self._detections_3d_sub = self.create_subscription(
+            Detection3DArray,
+            detections_3d_topic,
+            self._detections_callback,
+            qos_profile_system_default,
         )
         self._camera_info_sub = self.create_subscription(
             CameraInfo, camera_info_topic, self._camera_info_callback, qos_profile_sensor_data
         )
-        self._output_pub = self.create_publisher(
-            Detection3DArray, output_topic, qos_profile_system_default
+        self._landmarks_pub = self.create_publisher(
+            Detection3DArray, landmarks_topic, qos_profile_system_default
         )
         self._marker_pub = self.create_publisher(
             MarkerArray, marker_topic, qos_profile_system_default
@@ -141,7 +144,7 @@ class LandmarkTrackerNode(Node):
         self._update_landmarks(detections, heading_known, in_view)
 
         landmarks_msg, markers_msg, labels_msg = self._convert_to_landmark_msgs(msg)
-        self._output_pub.publish(landmarks_msg)
+        self._landmarks_pub.publish(landmarks_msg)
         self._marker_pub.publish(markers_msg)
         self._label_pub.publish(labels_msg)
 

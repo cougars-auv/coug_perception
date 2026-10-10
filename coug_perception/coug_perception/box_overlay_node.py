@@ -32,49 +32,53 @@ class BoxOverlayNode(Node):
         self.declare_parameter("labels_file", "")
         self.declare_parameter("sync_slop_sec", 0.05)
         self.declare_parameter("image_topic", "camera/rgb/image_rect_color")
-        self.declare_parameter("boxes_topic", "camera/boxes")
-        self.declare_parameter("output_topic", "camera/boxes/image")
+        self.declare_parameter("detections_topic", "camera/detections")
+        self.declare_parameter("debug_image_topic", "camera/debug_image")
 
         with open(self.get_parameter("labels_file").value) as f:
             self._labels = {str(label): name for label, name in yaml.safe_load(f).items()}
         sync_slop_sec = self.get_parameter("sync_slop_sec").value
         image_topic = self.get_parameter("image_topic").value
-        boxes_topic = self.get_parameter("boxes_topic").value
-        output_topic = self.get_parameter("output_topic").value
+        detections_topic = self.get_parameter("detections_topic").value
+        debug_image_topic = self.get_parameter("debug_image_topic").value
 
         self._image_sub = message_filters.Subscriber(
             self, Image, image_topic, qos_profile=qos_profile_sensor_data
         )
-        self._boxes_sub = message_filters.Subscriber(
-            self, Detection2DArray, boxes_topic, qos_profile=qos_profile_system_default
+        self._detections_sub = message_filters.Subscriber(
+            self, Detection2DArray, detections_topic, qos_profile=qos_profile_system_default
         )
 
         self._time_sync = message_filters.ApproximateTimeSynchronizer(
-            [self._image_sub, self._boxes_sub],
+            [self._image_sub, self._detections_sub],
             queue_size=10,
             slop=sync_slop_sec,
         )
         self._time_sync.registerCallback(self._sync_callback)
 
-        self._output_pub = self.create_publisher(Image, output_topic, qos_profile_system_default)
+        self._debug_image_pub = self.create_publisher(
+            Image, debug_image_topic, qos_profile_system_default
+        )
 
         self._bridge = CvBridge()
 
         self.get_logger().info("Initialization complete.")
 
-    def _sync_callback(self, image_msg: Image, boxes_msg: Detection2DArray, /) -> None:
-        overlay_msg = self._convert_to_overlay(image_msg, boxes_msg)
+    def _sync_callback(self, image_msg: Image, detections_msg: Detection2DArray, /) -> None:
+        overlay_msg = self._convert_to_overlay(image_msg, detections_msg)
         if overlay_msg is not None:
-            self._output_pub.publish(overlay_msg)
+            self._debug_image_pub.publish(overlay_msg)
 
-    def _convert_to_overlay(self, image_msg: Image, boxes_msg: Detection2DArray) -> Image | None:
+    def _convert_to_overlay(
+        self, image_msg: Image, detections_msg: Detection2DArray
+    ) -> Image | None:
         try:
             cv_image = self._bridge.imgmsg_to_cv2(image_msg, "bgr8")
         except CvBridgeError as e:
             self.get_logger().error(f"Failed to convert camera image: {e}")
             return None
 
-        for detection in boxes_msg.detections:
+        for detection in detections_msg.detections:
             if not detection.results:
                 continue
             name = self._labels.get(detection.results[0].hypothesis.class_id)
